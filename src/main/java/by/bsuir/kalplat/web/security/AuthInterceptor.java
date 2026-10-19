@@ -43,9 +43,11 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (requirement == null || requirement.value().length == 0) {
             return true;
         }
-        boolean allowed = Arrays.stream(requirement.value()).anyMatch(user::hasRole);
+        Role[] allowedRoles = requirement.value();
+        boolean allowed = Arrays.stream(allowedRoles).anyMatch(user::hasRole);
         if (!allowed) {
-            throw new AccessDeniedException(requirement.value()[0]);
+            throw new AccessDeniedException(Arrays.stream(allowedRoles)
+                    .findFirst().orElseThrow());
         }
         return true;
     }
