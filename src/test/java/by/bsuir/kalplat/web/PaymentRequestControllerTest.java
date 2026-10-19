@@ -147,4 +147,103 @@ class PaymentRequestControllerTest {
                 .andExpect(jsonPath("$.status").value("REJECTED"))
                 .andExpect(jsonPath("$.rejectReason").value("Не подтверждена потребность"));
     }
+
+    @Test
+    @DisplayName("Список заявок фильтруется по статусу")
+    void listFilteredByStatus() throws Exception {
+        String created = mockMvc.perform(post("/api/v1/requests")
+                        .header(CurrentUser.HEADER, INITIATOR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody("7700.00")))
+                .andReturn().getResponse().getContentAsString();
+        long id = objectMapper.readTree(created).get("id").asLong();
+        mockMvc.perform(post("/api/v1/requests/" + id + "/submit")
+                .header(CurrentUser.HEADER, INITIATOR));
+
+        mockMvc.perform(get("/api/v1/requests").param("status", "ON_APPROVAL")
+                        .header(CurrentUser.HEADER, TREASURER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("ON_APPROVAL"));
+    }
+
+    @Test
+    @DisplayName("Заявка доступна по идентификатору")
+    void getById() throws Exception {
+        String created = mockMvc.perform(post("/api/v1/requests")
+                        .header(CurrentUser.HEADER, INITIATOR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody("4300.00")))
+                .andReturn().getResponse().getContentAsString();
+        long id = objectMapper.readTree(created).get("id").asLong();
+
+        mockMvc.perform(get("/api/v1/requests/" + id)
+                        .header(CurrentUser.HEADER, INITIATOR))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.amount").value(4300.00));
+    }
+
+    @Test
+    @DisplayName("Справочник статусов содержит все значения")
+    void statusesDictionary() throws Exception {
+        mockMvc.perform(get("/api/v1/requests/statuses")
+                        .header(CurrentUser.HEADER, INITIATOR))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(7));
+    }
+
+    @Test
+    @DisplayName("Заявка сверх остатка лимита получает признак превышения")
+    void overLimitFlag() throws Exception {
+        mockMvc.perform(post("/api/v1/requests")
+                        .header(CurrentUser.HEADER, INITIATOR)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody("9900000.00")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.overLimit").value(true));
+    }
+
+    @Test
+    @DisplayName("Плановая дата в прошлом отклоняется с кодом 400")
+    void pastPlannedDate() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "cfoId", 1, "contractId", 1, "amount", "1000.00",
+                "purpose", "Оплата по счёту", "plannedDate",
+                LocalDate.now().minusDays(1).toString()));
+        mockMvc.perform(post("/api/v1/requests")
+                        .header(CurrentUser.HEADER, INITIATOR)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Несуществующий пользователь получает код 401")
+    void unknownUser() throws Exception {
+        mockMvc.perform(get("/api/v1/requests").header(CurrentUser.HEADER, "999"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/requests").header(CurrentUser.HEADER, "абв"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Отклонение без причины завершается кодом 400")
+    void rejectWithoutReason() throws Exception {
+        mockMvc.perform(post("/api/v1/requests/1/reject")
+                        .header(CurrentUser.HEADER, CFO_MANAGER)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Создание заявки по несуществующему договору возвращает 404")
+    void unknownContract() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "cfoId", 1, "contractId", 999, "amount", "1000.00",
+                "purpose", "Оплата по счёту", "plannedDate",
+                LocalDate.now().plusDays(5).toString()));
+        mockMvc.perform(post("/api/v1/requests")
+                        .header(CurrentUser.HEADER, INITIATOR)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isNotFound());
+    }
 }

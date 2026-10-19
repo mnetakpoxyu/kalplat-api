@@ -97,4 +97,109 @@ class RegistryAndForecastTest {
         assertThatThrownBy(() -> forecastService.forecast(LocalDate.now(), 0,
                 BigDecimal.TEN)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("Пустой реестр формируется без ошибок")
+    void emptyRegistry() {
+        RegistryDto registry = registryService.buildRegistry(
+                LocalDate.now().minusDays(30), new BigDecimal("1000.00"), null);
+        assertThat(registry.included()).isEmpty();
+        assertThat(registry.includedAmount()).isEqualByComparingTo("0");
+        assertThat(registry.strategy()).isEqualTo("BY_DUE_DATE");
+    }
+
+    @Test
+    @DisplayName("Исполнение пустого реестра отклоняется")
+    void executeEmptyRegistry() {
+        assertThatThrownBy(() -> registryService.execute(
+                LocalDate.now().minusDays(30), new BigDecimal("1000.00"), null))
+                .isInstanceOf(by.bsuir.kalplat.web.error.BusinessRuleException.class)
+                .hasMessageContaining("отсутствуют заявки");
+    }
+
+    @Test
+    @DisplayName("Реестр формируется по правилу приоритизации BY_PENALTY")
+    void registryWithPenaltyStrategy() {
+        approved("30000.00", 6);
+        RegistryDto registry = registryService.buildRegistry(
+                LocalDate.now().plusDays(8), new BigDecimal("50000.00"), "BY_PENALTY");
+        assertThat(registry.strategy()).isEqualTo("BY_PENALTY");
+        assertThat(registry.included()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Реестр формируется по правилу приоритизации BY_CFO_WEIGHT")
+    void registryWithCfoWeightStrategy() {
+        approved("25000.00", 6);
+        RegistryDto registry = registryService.buildRegistry(
+                LocalDate.now().plusDays(8), new BigDecimal("50000.00"),
+                "BY_CFO_WEIGHT");
+        assertThat(registry.strategy()).isEqualTo("BY_CFO_WEIGHT");
+    }
+
+    @Test
+    @DisplayName("Прогноз без заявок не содержит кассовых разрывов")
+    void forecastWithoutGaps() {
+        ForecastDto forecast = forecastService.forecast(
+                LocalDate.now().plusDays(200), 3, new BigDecimal("1000.00"));
+        assertThat(forecast.gapCount()).isZero();
+        assertThat(forecast.recommendations()).isEmpty();
+        assertThat(forecast.days()).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("Горизонт прогнозирования свыше 180 дней отклоняется")
+    void forecastHorizonUpperBound() {
+        assertThatThrownBy(() -> forecastService.forecast(LocalDate.now(), 181,
+                BigDecimal.TEN)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1...180");
+    }
+
+    @Test
+    @DisplayName("Отклонение одобренной заявки освобождает резерв бюджета")
+    void rejectApprovedReleasesReserve() {
+        PaymentRequest request = approved("40000.00", 4);
+        User treasurer = users.findById(3L).orElseThrow();
+        BigDecimal reservedBefore = request.getBudget().getReservedAmount();
+
+        requestService.reject(request.getId(), treasurer, "Отменена поставка");
+
+        PaymentRequest stored = requests.findById(request.getId()).orElseThrow();
+        assertThat(stored.getStatus()).isEqualTo(RequestStatus.REJECTED);
+        assertThat(stored.getRejectReason()).isEqualTo("Отменена поставка");
+        assertThat(stored.getBudget().getReservedAmount())
+                .isLessThanOrEqualTo(reservedBefore);
+    }
+
+    @Test
+    @DisplayName("Передача чужой заявки на согласование запрещена")
+    void submitForeignRequest() {
+        User initiator = users.findById(1L).orElseThrow();
+        User treasurer = users.findById(3L).orElseThrow();
+        PaymentRequest request = requestService.create(new RequestCreateDto(
+                1L, 1L, new BigDecimal("1200.00"), "Оплата по договору",
+                LocalDate.now().plusDays(3)), initiator);
+
+        assertThatThrownBy(() -> requestService.submit(request.getId(), treasurer))
+                .isInstanceOf(by.bsuir.kalplat.web.error.AccessDeniedException.class);
+    }
+
+    @Test
+    @DisplayName("Согласование администратором запрещено")
+    void approveByAdmin() {
+        PaymentRequest request = approved("1500.00", 3);
+        User admin = users.findById(4L).orElseThrow();
+        assertThatThrownBy(() -> requestService.approve(request.getId(), admin))
+                .isInstanceOf(by.bsuir.kalplat.web.error.AccessDeniedException.class);
+    }
+
+    @Test
+    @DisplayName("Заявка на несуществующий бюджет отклоняется")
+    void unknownBudget() {
+        User initiator = users.findById(1L).orElseThrow();
+        assertThatThrownBy(() -> requestService.create(new RequestCreateDto(
+                99L, 1L, new BigDecimal("100.00"), "Оплата",
+                LocalDate.now().plusDays(3)), initiator))
+                .isInstanceOf(by.bsuir.kalplat.web.error.NotFoundException.class);
+    }
 }
